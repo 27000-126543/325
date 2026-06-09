@@ -12,8 +12,18 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     from app.database import engine, Base, SessionLocal
     from app import models
+    import asyncio as _asyncio
+    from app.services import NotificationService as _NS
+    from app.routers.notifications import manager as _ws_manager
     Base.metadata.create_all(bind=engine)
     logger.info("数据库表已初始化")
+
+    try:
+        _NS.loop = _asyncio.get_running_loop()
+        _NS.manager = _ws_manager
+        logger.info("NotificationService已绑定WS事件循环")
+    except Exception as _e:
+        logger.warning(f"NS ws绑定异常: {_e}")
 
     def _seed_db():
         import hashlib
@@ -111,9 +121,9 @@ async def lifespan(app: FastAPI):
                 ])
 
             demo_regions = [
-                ("示范县A", "REG001", "示范流域", 50, 100, 5000, 4200),
-                ("示范县B", "REG002", "示范流域", 40, 80, 4000, 4100),
-                ("示范县C", "REG003", "示范流域", 30, 60, 3000, 3200),
+                ("示范县A", "REG001", "示范流域", 50, 100, 4000, 4500),
+                ("示范县B", "REG002", "示范流域", 40, 80, 5500, 3800),
+                ("示范县C", "REG003", "示范流域", 30, 60, 3000, 3500),
             ]
             for name, code, basin, pop, gdp_val, demand, supply in demo_regions:
                 if not db.query(models.AdministrativeRegion).filter(models.AdministrativeRegion.code == code).first():
@@ -123,6 +133,8 @@ async def lifespan(app: FastAPI):
                         gdp=gdp_val, annual_water_demand=demand, current_supply_capacity=supply,
                         water_shortage_index=round(ws_idx, 4)
                     ))
+
+            db.flush()  # 给AdministrativeRegion分配id，后面查reg_a/b/c才能取到
 
             reg_a = db.query(models.AdministrativeRegion).filter(models.AdministrativeRegion.code == "REG001").first()
             reg_b = db.query(models.AdministrativeRegion).filter(models.AdministrativeRegion.code == "REG002").first()

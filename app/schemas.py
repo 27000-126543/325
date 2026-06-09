@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 from app.models import (
@@ -481,11 +481,28 @@ class NotificationOut(BaseModel):
     title: str
     content: Optional[str]
     target_roles: Optional[List]
+    target_user_ids: Optional[List] = None
     related_business_type: Optional[str]
     related_business_id: Optional[int]
     is_read: bool
     pushed_at: Optional[datetime]
     created_at: datetime
+
+    @field_validator('target_roles', 'target_user_ids', mode='before')
+    @classmethod
+    def _norm_json_list(cls, v):
+        import json as _json
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                p = _json.loads(v)
+                return p if isinstance(p, list) else []
+            except (ValueError, TypeError):
+                return []
+        return []
 
     class Config:
         from_attributes = True

@@ -205,19 +205,6 @@ def list_reports(
     )
 
 
-@router.get("/{report_id}", response_model=ResponseModel, summary="报告详情")
-def get_report_detail(report_id: int, db: Session = Depends(get_db)):
-    r = db.query(DailyReport).filter(DailyReport.id == report_id).first()
-    if not r:
-        raise HTTPException(404, "报告不存在")
-    return ResponseModel(data={
-        **DailyReportOut.model_validate(r).model_dump(),
-        "reservoir_stats_detail": json.loads(r.reservoir_stats) if r.reservoir_stats else [],
-        "quality_station_stats_detail": json.loads(r.quality_station_stats) if r.quality_station_stats else [],
-        "eco_monitor_stats_detail": json.loads(r.eco_monitor_stats) if r.eco_monitor_stats else []
-    })
-
-
 @router.get("/export/csv", summary="按流域/日期范围导出报告CSV")
 def export_reports_csv(
     basin: Optional[str] = Query(None),
@@ -314,3 +301,16 @@ def export_reports_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+@router.get("/{report_id}", response_model=ResponseModel, summary="报告详情")
+def get_report_detail(report_id: int, db: Session = Depends(get_db)):
+    r = db.query(DailyReport).filter(DailyReport.id == report_id).first()
+    if not r:
+        raise HTTPException(404, "报告不存在")
+    return ResponseModel(data={
+        **DailyReportOut.model_validate(r).model_dump(),
+        "reservoir_stats_detail": json.loads(r.reservoir_stats) if r.reservoir_stats else [],
+        "quality_station_stats_detail": json.loads(r.quality_station_stats) if r.quality_station_stats else [],
+        "eco_monitor_stats_detail": json.loads(r.eco_monitor_stats) if r.eco_monitor_stats else []
+    })

@@ -1,0 +1,8 @@
+Five Issues Regression Result
+======================================================================
+Q1_transfer_chain: FAIL: all signed but not approved: countersigning
+Q2_notifications: PASS
+Q3_report_export: PASS
+Q4_websocket_push: FAIL: quality HTTP 404: {"detail":"Not Found"}
+Q5_eco_nondesign_discharge: PASS
+Total: 5 items, 3 passed

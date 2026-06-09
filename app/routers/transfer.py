@@ -23,6 +23,26 @@ def generate_scheme_no():
     return f"TR{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:6].upper()}"
 
 
+def _normalize_json_list(val):
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            return parsed if isinstance(parsed, list) else []
+        except (ValueError, TypeError):
+            return []
+    return []
+
+
+def _normalize_scheme(s: CrossRegionTransfer) -> CrossRegionTransfer:
+    s.required_countersign_regions = _normalize_json_list(s.required_countersign_regions)
+    s.signed_regions = _normalize_json_list(s.signed_regions)
+    return s
+
+
 @router.post("/regions", response_model=ResponseModel, summary="创建行政区数据")
 def create_region(
     name: str, code: str, basin: str,
@@ -178,7 +198,7 @@ def generate_transfer_schemes(request: GenerateTransferRequest, db: Session = De
                 water_shortage_index=to_r.water_shortage_index,
                 priority_score=round(priority, 4),
                 status=TransferStatus.DRAFT,
-                required_countersign_regions=json.dumps(required_signs),
+                required_countersign_regions=required_signs,
                 signed_regions=[],
                 overdue_deadline=datetime.utcnow() + timedelta(days=3)
             )
@@ -192,6 +212,7 @@ def generate_transfer_schemes(request: GenerateTransferRequest, db: Session = De
     db.commit()
     for s in schemes:
         db.refresh(s)
+        _normalize_scheme(s)
 
     schemes.sort(key=lambda x: x.priority_score, reverse=True)
 
@@ -222,6 +243,7 @@ def submit_scheme_for_countersign(scheme_id: int, creator_id: Optional[int] = No
 
     db.commit()
     db.refresh(scheme)
+    _normalize_scheme(scheme)
 
     NotificationService.notify_transfer(
         db, scheme.id,
@@ -247,6 +269,8 @@ def list_schemes(
         q = q.filter(CrossRegionTransfer.to_region_id == to_region_id)
     total = q.count()
     items = q.order_by(CrossRegionTransfer.priority_score.desc(), CrossRegionTransfer.id.desc()).offset((page-1)*page_size).limit(page_size).all()
+    for i in items:
+        _normalize_scheme(i)
     return PaginatedResponse(
         total=total, page=page, page_size=page_size,
         data=[TransferSchemeOut.model_validate(i) for i in items]
@@ -263,11 +287,11 @@ def submit_countersign(data: CountersignRequest, db: Session = Depends(get_db)):
     if scheme.status != TransferStatus.COUNTERSIGNING:
         raise HTTPException(400, "方案不在会签状态")
 
-    required = json.loads(scheme.required_countersign_regions) if scheme.required_countersign_regions else []
+    required = _normalize_json_list(scheme.required_countersign_regions)
     if data.region_id not in required:
         raise HTTPException(400, "该行政区无需会签")
 
-    signed = scheme.signed_regions or []
+    signed = _normalize_json_list(scheme.signed_regions)
     if data.region_id in signed:
         raise HTTPException(400, "该行政区已会签")
 
@@ -289,7 +313,7 @@ def submit_countersign(data: CountersignRequest, db: Session = Depends(get_db)):
         return ResponseModel(data={"approved": False, "reason": data.opinion or "被行政区拒绝"})
 
     signed.append(data.region_id)
-    scheme.signed_regions = signed
+    scheme.signed_regions = list(signed)  # 用新list对象触发SQLAlchemy变更检测
 
     if set(signed) >= set(required):
         scheme.status = TransferStatus.APPROVED
@@ -317,6 +341,7 @@ def submit_countersign(data: CountersignRequest, db: Session = Depends(get_db)):
 
     db.commit()
     db.refresh(scheme)
+    _normalize_scheme(scheme)
 
     return ResponseModel(data={
         "scheme": TransferSchemeOut.model_validate(scheme).model_dump(),
@@ -336,8 +361,8 @@ def check_overdue_schemes(db: Session = Depends(get_db)):
 
     reminded = 0
     for s in overdue:
-        signed = s.signed_regions or []
-        required = json.loads(s.required_countersign_regions) if s.required_countersign_regions else []
+        signed = _normalize_json_list(s.signed_regions)
+        required = _normalize_json_list(s.required_countersign_regions)
         remaining = set(required) - set(signed)
 
         if s.last_reminder_at and (now - s.last_reminder_at) < timedelta(hours=6):
@@ -383,6 +408,7 @@ def update_scheme_execution(scheme_id: int, action: str = Query(..., description
 
     db.commit()
     db.refresh(scheme)
+    _normalize_scheme(scheme)
     return ResponseModel(data=TransferSchemeOut.model_validate(scheme).model_dump())
 
 

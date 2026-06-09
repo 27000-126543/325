@@ -6,14 +6,88 @@ from app import models
 import uuid
 import json
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 
+def _safe_json_list(v):
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        try:
+            p = json.loads(v)
+            return p if isinstance(p, list) else []
+        except (ValueError, TypeError):
+            return []
+    return []
+
+
 class NotificationService:
+    manager = None
+    loop = None
+
     @staticmethod
     def generate_message_no():
         return f"MSG{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:6].upper()}"
+
+    @staticmethod
+    def _run_coro(coro):
+        if NotificationService.loop is None or NotificationService.manager is None:
+            return False
+        try:
+            loop = NotificationService.loop
+            if not loop.is_running():
+                return False
+
+            def _submit():
+                try:
+                    t = asyncio.ensure_future(coro, loop=loop)
+                    def _log_done(f):
+                        try:
+                            f.result()
+                        except Exception as _ex:
+                            logger.warning(f"WS push coro err: {_ex}")
+                    t.add_done_callback(_log_done)
+                except Exception as _e:
+                    logger.warning(f"submit WS coro err: {_e}")
+
+            loop.call_soon_threadsafe(_submit)
+            return True
+        except Exception as _e:
+            logger.warning(f"_run_coro err: {_e}")
+            return False
+
+    @staticmethod
+    def _dispatch_ws_push(msg: NotificationMessage):
+        if NotificationService.manager is None:
+            return
+        roles = _safe_json_list(msg.target_roles)
+        user_ids = _safe_json_list(msg.target_user_ids)
+        payload = {
+            "type": "notification",
+            "message_type": msg.message_type,
+            "title": msg.title,
+            "content": msg.content,
+            "message_id": msg.id,
+            "message_no": msg.message_no,
+            "related_business_type": msg.related_business_type,
+            "related_business_id": msg.related_business_id
+        }
+        if roles:
+            NotificationService._run_coro(
+                NotificationService.manager.push_to_roles(roles, dict(payload))
+            )
+        if user_ids:
+            NotificationService._run_coro(
+                NotificationService.manager.push_to_users(user_ids, dict(payload))
+            )
+        if not roles and not user_ids:
+            NotificationService._run_coro(
+                NotificationService.manager.push_to_all(dict(payload))
+            )
 
     @staticmethod
     def create_notification(
@@ -32,8 +106,8 @@ class NotificationService:
             message_type=message_type,
             title=title,
             content=content,
-            target_roles=json.dumps(target_roles) if target_roles else None,
-            target_user_ids=json.dumps(target_user_ids) if target_user_ids else None,
+            target_roles=target_roles if target_roles else None,
+            target_user_ids=target_user_ids if target_user_ids else None,
             related_business_type=related_business_type,
             related_business_id=related_business_id,
             pushed_at=datetime.utcnow(),
@@ -43,6 +117,7 @@ class NotificationService:
         db.commit()
         db.refresh(msg)
         logger.info(f"Notification created: {title}")
+        NotificationService._dispatch_ws_push(msg)
         return msg
 
     @staticmethod
@@ -149,12 +224,13 @@ class NotificationService:
     def get_unread_messages(db: Session, user_id: Optional[int] = None, role: Optional[str] = None, limit: int = 50):
         query = db.query(NotificationMessage).filter(NotificationMessage.is_read == False)
         results = []
-        messages = query.order_by(NotificationMessage.created_at.desc()).limit(limit).all()
+        messages = query.order_by(NotificationMessage.created_at.desc()).limit(limit * 5).all()
         for msg in messages:
-            roles = json.loads(msg.target_roles) if msg.target_roles else []
-            user_ids = json.loads(msg.target_user_ids) if msg.target_user_ids else []
+            roles = _safe_json_list(msg.target_roles)
+            user_ids = _safe_json_list(msg.target_user_ids)
+            roles_norm = [str(r).lower() for r in roles]
             include = False
-            if role and role in roles:
+            if role and str(role).lower() in roles_norm:
                 include = True
             if user_id and user_id in user_ids:
                 include = True
@@ -162,6 +238,8 @@ class NotificationService:
                 include = True
             if include:
                 results.append(msg)
+                if len(results) >= limit:
+                    break
         return results
 
 

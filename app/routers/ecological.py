@@ -92,9 +92,12 @@ def report_ecological_flow(
         ).first()
 
         if reservoir:
-            new_release = reservoir.current_outflow + deficit * 1.2
-            if new_release > reservoir.design_discharge or 0 if not reservoir.design_discharge else new_release:
-                new_release = min(new_release, reservoir.design_discharge or new_release)
+            current_out = reservoir.current_outflow or 0
+            new_release = current_out + deficit * 1.2
+            design_cap = reservoir.design_discharge
+            if design_cap and design_cap > 0:
+                new_release = min(new_release, design_cap)
+            new_release = round(max(new_release, monitor.legal_minimum_flow * 1.05), 2)
 
             adjustment = EcologicalAdjustmentRecord(
                 monitor_id=monitor_id,
